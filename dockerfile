@@ -2,45 +2,42 @@ FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
-# Accept Coqui TOS non-interactively
-ENV COQUI_TOS_AGREED=1
+ENV TORCH_CUDA_ARCH_LIST="7.5 8.0 8.6"
 
-WORKDIR /app
+# System deps
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     ffmpeg \
-    libsndfile1 \
     git \
-    espeak-ng \
-    libespeak-ng1 \
+    libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ln -s /usr/bin/python3 /usr/bin/python
+RUN python3 -m pip install --upgrade pip
 
-RUN pip install --upgrade pip && \
-    pip install \
-      torch==2.2.0 \
-      torchvision==0.17.0 \
-      torchaudio==2.2.0 \
-      --index-url https://download.pytorch.org/whl/cu118
+WORKDIR /app
 
+# Install Python deps
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN python - <<EOF
-from TTS.api import TTS
-TTS("tts_models/multilingual/multi-dataset/xtts_v2")
-print("XTTS v2 model cached successfully")
+# -------------------------------
+# 🔥 PRELOAD MODELS AT BUILD TIME
+# -------------------------------
+RUN python3 - <<'EOF'
+import torch
+from nemo.collections.tts.models import FastPitchModel, HifiGanModel
+
+print("Downloading FastPitch...")
+FastPitchModel.from_pretrained("tts_en_fastpitch")
+
+print("Downloading HiFi-GAN...")
+HifiGanModel.from_pretrained("tts_hifigan")
+
+print("Models downloaded successfully.")
 EOF
 
+# Copy handler last (best cache usage)
 COPY handler.py .
 
-# -------------------------
-# Copy default XTTS speaker WAV
-# -------------------------
-RUN mkdir -p /app/voices
-COPY voices/default.wav /app/voices/default.wav
-
-
-CMD ["python", "handler.py"]
+CMD ["python3", "-u", "handler.py"]
