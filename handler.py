@@ -1,99 +1,74 @@
+import base64
+import io
 import runpod
 import torch
-import io
-import base64
 import soundfile as sf
-from TTS.api import TTS
-import os
 
-# -------------------------
-# Device setup
-# -------------------------
+from nemo.collections.tts.models import FastPitchModel, HifiGanModel
+
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print("Using device:", DEVICE)
 
-# -------------------------
-# Load XTTS v2 model ONCE
-# -------------------------
-tts = TTS(
-    model_name="tts_models/multilingual/multi-dataset/xtts_v2",
-    progress_bar=False,
-    gpu=DEVICE == "cuda",
-)
+print(f"[Init] Using device: {DEVICE}")
 
-# CUDA tuning (safe)
-if DEVICE == "cuda":
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.allow_tf32 = True
+# Load models once (cold start only)
+print("[Init] Loading FastPitch...")
+fastpitch = FastPitchModel.from_pretrained(
+    model_name="tts_en_fastpitch"
+).to(DEVICE).eval()
 
-# -------------------------
-# Default speaker WAV (REQUIRED for XTTS)
-# -------------------------
-DEFAULT_SPEAKER_WAV = "/app/voices/default.wav"
+print("[Init] Loading HiFi-GAN...")
+hifigan = HifiGanModel.from_pretrained(
+    model_name="tts_hifigan"
+).to(DEVICE).eval()
 
-if not os.path.exists(DEFAULT_SPEAKER_WAV):
-    raise RuntimeError(f"Default speaker wav not found: {DEFAULT_SPEAKER_WAV}")
 
-# -------------------------
-# Warm up model (XTTS requires speaker_wav)
-# -------------------------
-_ = tts.tts(
-    text="warmup",
-    speaker_wav=DEFAULT_SPEAKER_WAV,
-    language="en",
-)
-
-if DEVICE == "cuda":
-    torch.cuda.synchronize()
-
-print("XTTS warmup complete")
-
-# -------------------------
-# RunPod handler
-# -------------------------
-def handler(event):
+@torch.no_grad()
+def synthesize(text: str) -> bytes:
     """
-    Supported input:
-
-    {
-      "input": {
-        "text": "Hello world",
-        "language": "en",
-        "speaker_wav": "/optional/path/to.wav"
-      }
-    }
+    Convert text → waveform bytes (WAV)
     """
+    parsed = fastpitch.parse(text)
+    spectrogram = fastpitch.generate_spectrogram(tokens=parsed)
+    audio = hifigan.convert_spectrogram_to_audio(spec=spectrogram)
 
-    input_data = event.get("input", {})
-
-    text = input_data.get("text") or input_data.get("prompt")
-    language = input_data.get("language", "en")
-    speaker_wav = input_data.get("speaker_wav") or DEFAULT_SPEAKER_WAV
-
-    if not text or not isinstance(text, str):
-        return {"error": "Missing or invalid 'text' or 'prompt' field."}
-
-    if not os.path.exists(speaker_wav):
-        return {"error": f"Speaker wav not found: {speaker_wav}"}
-
-    wav = tts.tts(
-        text=text,
-        speaker_wav=speaker_wav,
-        language=language,
-    )
+    audio = audio.squeeze().cpu().numpy()
 
     buffer = io.BytesIO()
-    sf.write(buffer, wav, samplerate=24000, format="WAV")
+    sf.write(buffer, audio, samplerate=22050, format="WAV")
+    buffer.seek(0)
+    return buffer.read()
 
-    return {
-        "audio_base64": base64.b64encode(buffer.getvalue()).decode("utf-8"),
-        "sample_rate": 24000,
-        "format": "wav",
-        "model": "xtts_v2",
-        "speaker_wav": speaker_wav,
+
+def handler(event):
+    """
+    RunPod handler
+    Input:
+    {
+        "input": {
+            "text": "Hello world"
+        }
     }
+    """
+    try:
+        text = event["input"].get("text", "").strip()
+        if not text:
+            raise ValueError("Input 'text' is required")
 
-# -------------------------
-# Start RunPod serverless
-# -------------------------
+        wav_bytes = synthesize(text)
+        audio_base64 = base64.b64encode(wav_bytes).decode("utf-8")
+
+        return {
+            "audio_base64": audio_base64,
+            "format": "wav",
+            "sample_rate": 22050,
+            "model": "fastpitch"
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e)
+        }
+
+
 runpod.serverless.start({"handler": handler})
