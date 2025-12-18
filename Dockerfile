@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Pre-download FastPitch model at build time (important for cold start)
 RUN python3 - <<'EOF'
 from TTS.api import TTS
-TTS(model_name="tts_models/en/fastpitch", gpu=True)
+TTS(model_name="tts_models/en/fastpitch", gpu=False)
 print("FastPitch model downloaded.")
 EOF
 
