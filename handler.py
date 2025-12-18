@@ -1,51 +1,60 @@
-import base64
-import io
-
 import runpod
+import torch
+import io
+import base64
 import soundfile as sf
 from TTS.api import TTS
 
+# -------------------------
+# Device setup
+# -------------------------
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print("Using device:", DEVICE)
 
-# Load model once (cold start only)
-tts = TTS(
-    model_name="tts_models/en/fastpitch",
-    gpu=True
-)
+# -------------------------
+# Load FastPitch model ONCE
+# -------------------------
+tts = TTS("tts_models/en/ljspeech/fast_pitch").to(DEVICE)
 
-
+# -------------------------
+# RunPod handler
+# -------------------------
 def handler(event):
     """
-    Expected input:
+    Expected request format:
     {
-        "input": {
-            "text": "Hello world"
-        }
+      "input": {
+        "text": "Hello world"
+      }
     }
     """
-    try:
-        text = event["input"].get("text", "").strip()
-        if not text:
-            raise ValueError("Input 'text' is required")
 
-        # Generate waveform (numpy array)
-        wav = tts.tts(text)
+    # ✅ Read input text safely
+    input_data = event.get("input", {})
+    text = input_data.get("text")
 
-        # Write WAV to memory
-        buffer = io.BytesIO()
-        sf.write(buffer, wav, samplerate=22050, format="WAV")
-        buffer.seek(0)
-
+    if not text or not isinstance(text, str):
         return {
-            "audio_base64": base64.b64encode(buffer.read()).decode("utf-8"),
-            "format": "wav",
-            "sample_rate": 22050,
-            "model": "coqui_fastpitch"
+            "error": "Missing or invalid 'text' field in input."
         }
 
-    except Exception as e:
-        return {
-            "error": str(e)
-        }
+    # ✅ Generate speech
+    wav = tts.tts(text)
 
+    # ✅ Encode WAV to Base64 in-memory
+    buffer = io.BytesIO()
+    sf.write(buffer, wav, samplerate=22050, format="WAV")
 
+    audio_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    return {
+        "audio_base64": audio_base64,
+        "sample_rate": 22050,
+        "format": "wav",
+        "model": "fast_pitch"
+    }
+
+# -------------------------
+# IMPORTANT: block forever
+# -------------------------
 runpod.serverless.start({"handler": handler})
