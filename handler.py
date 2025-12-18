@@ -21,34 +21,42 @@ tts = TTS("tts_models/en/ljspeech/fast_pitch").to(DEVICE)
 # -------------------------
 def handler(event):
     """
-    Expected request format:
+    Supported request formats:
+
     {
       "input": {
         "text": "Hello world"
       }
     }
+
+    OR
+
+    {
+      "input": {
+        "prompt": "Hello world"
+      }
+    }
     """
 
-    # ✅ Read input text safely
     input_data = event.get("input", {})
-    text = input_data.get("text")
+
+    # ✅ Accept BOTH `text` and `prompt`
+    text = input_data.get("text") or input_data.get("prompt")
 
     if not text or not isinstance(text, str):
         return {
-            "error": "Missing or invalid 'text' field in input."
+            "error": "Missing or invalid 'text' or 'prompt' field in input."
         }
 
     # ✅ Generate speech
     wav = tts.tts(text)
 
-    # ✅ Encode WAV to Base64 in-memory
+    # ✅ Encode WAV to Base64 in memory
     buffer = io.BytesIO()
     sf.write(buffer, wav, samplerate=22050, format="WAV")
 
-    audio_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-
     return {
-        "audio_base64": audio_base64,
+        "audio_base64": base64.b64encode(buffer.getvalue()).decode("utf-8"),
         "sample_rate": 22050,
         "format": "wav",
         "model": "fast_pitch"
