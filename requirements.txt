@@ -1,8 +1,4 @@
 runpod
 TTS==0.22.0
 numpy==1.22.0
-torch==2.1.0
-torchaudio==2.1.0
 soundfile
-scipy
-nemo_toolkit[tts]==1.22.0
